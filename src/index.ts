@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-// Firestore REST API utilities
+// Firestore REST API utilities (Simplified Version)
 interface FirestoreData {
   [key: string]: any;
 }
@@ -23,104 +23,13 @@ interface FirestoreDocument {
 
 class FirestoreClient {
   private projectId: string;
-  private accessToken: string | null = null;
 
   constructor(projectId: string) {
     this.projectId = projectId;
   }
 
-  async getAccessToken(clientEmail: string, privateKey: string): Promise<string> {
-    if (this.accessToken) return this.accessToken;
-
-    const now = Math.floor(Date.now() / 1000);
-    const payload = {
-      iss: clientEmail,
-      scope: 'https://www.googleapis.com/auth/datastore',
-      aud: 'https://oauth2.googleapis.com/token',
-      exp: now + 3600,
-      iat: now,
-    };
-
-    const header = { alg: 'RS256', typ: 'JWT' };
-    const encodedHeader = this.base64UrlEncode(JSON.stringify(header));
-    const encodedPayload = this.base64UrlEncode(JSON.stringify(payload));
-    
-    const signatureInput = `${encodedHeader}.${encodedPayload}`;
-    
-    try {
-      // Clean and prepare the private key
-      const cleanPrivateKey = privateKey
-        .replace(/\\n/g, '\n')
-        .replace(/\r/g, '')
-        .trim();
-      
-      // Convert PEM to binary
-      const pemContent = cleanPrivateKey
-        .replace('-----BEGIN PRIVATE KEY-----', '')
-        .replace('-----END PRIVATE KEY-----', '')
-        .replace(/\s/g, '');
-      
-      const binaryKey = this.base64ToArrayBuffer(pemContent);
-      
-      // Import the key
-      const key = await crypto.subtle.importKey(
-        'pkcs8',
-        binaryKey,
-        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-        false,
-        ['sign']
-      );
-
-      // Sign the payload
-      const signature = await crypto.subtle.sign(
-        'RSASSA-PKCS1-v1_5',
-        key,
-        new TextEncoder().encode(signatureInput)
-      );
-
-      const encodedSignature = this.base64UrlEncode(new Uint8Array(signature));
-      const jwt = `${signatureInput}.${encodedSignature}`;
-
-      const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
-      });
-
-      const result = await response.json() as any;
-      
-      if (result.error) {
-        throw new Error(`OAuth error: ${result.error_description || result.error}`);
-      }
-      
-      this.accessToken = result.access_token;
-      return this.accessToken;
-    } catch (error) {
-      console.error('Error getting access token:', error);
-      throw new Error(`Authentication failed: ${error.message}`);
-    }
-  }
-
-  private base64UrlEncode(data: string | Uint8Array): string {
-    let base64: string;
-    if (typeof data === 'string') {
-      base64 = btoa(data);
-    } else {
-      base64 = btoa(String.fromCharCode(...data));
-    }
-    return base64.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  }
-
-  private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
-  async addDocument(collection: string, data: FirestoreData, token: string): Promise<any> {
+  // Simplified method using Firebase Web API key
+  async addDocument(collection: string, data: FirestoreData, apiKey: string): Promise<any> {
     const fields: any = {};
     
     // Convert data to Firestore format
@@ -139,30 +48,39 @@ class FirestoreClient {
     // Add timestamp
     fields.timestamp = { timestampValue: new Date().toISOString() };
 
-    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents/${collection}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents/${collection}?key=${apiKey}`;
     
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ fields })
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Firestore error: ${response.status} - ${errorText}`);
+    }
+
     return response.json();
   }
 
-  async getDocuments(collection: string, token: string): Promise<any[]> {
-    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents/${collection}`;
+  async getDocuments(collection: string, apiKey: string): Promise<any[]> {
+    const url = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents/${collection}?key=${apiKey}`;
     
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Firestore get error:', errorText);
+      return []; // Return empty array instead of throwing error
+    }
 
     const result = await response.json() as any;
     
@@ -482,8 +400,7 @@ app.use('*', cors());
 // Environment interface
 interface Env {
   FIREBASE_PROJECT_ID: string;
-  FIREBASE_CLIENT_EMAIL: string;
-  FIREBASE_PRIVATE_KEY: string;
+  FIREBASE_API_KEY: string; // Changed from complex auth to simple API key
 }
 
 // Initialize Firestore client
@@ -502,11 +419,14 @@ app.use('*', async (c, next) => {
 app.get('/home', async (c) => {
   try {
     const env = c.env as Env;
-    const token = await firestoreClient.getAccessToken(env.FIREBASE_CLIENT_EMAIL, env.FIREBASE_PRIVATE_KEY);
-    const data = await firestoreClient.getDocuments('received_data', token);
+    const data = await firestoreClient.getDocuments('received_data', env.FIREBASE_API_KEY);
     
     // Sort by timestamp descending (newest first)
-    data.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    data.sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeB - timeA;
+    });
     
     return c.html(getHomePageHTML(data));
   } catch (error) {
@@ -521,8 +441,7 @@ app.post('/receive', async (c) => {
     const env = c.env as Env;
     const jsonData = await c.req.json();
     
-    const token = await firestoreClient.getAccessToken(env.FIREBASE_CLIENT_EMAIL, env.FIREBASE_PRIVATE_KEY);
-    const result = await firestoreClient.addDocument('received_data', jsonData, token);
+    const result = await firestoreClient.addDocument('received_data', jsonData, env.FIREBASE_API_KEY);
     
     return c.json({ 
       success: true, 
@@ -555,11 +474,14 @@ app.get('/', (c) => {
 app.get('/api/data', async (c) => {
   try {
     const env = c.env as Env;
-    const token = await firestoreClient.getAccessToken(env.FIREBASE_CLIENT_EMAIL, env.FIREBASE_PRIVATE_KEY);
-    const data = await firestoreClient.getDocuments('received_data', token);
+    const data = await firestoreClient.getDocuments('received_data', env.FIREBASE_API_KEY);
     
     // Sort by timestamp descending
-    data.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    data.sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeB - timeA;
+    });
     
     return c.json({
       success: true,

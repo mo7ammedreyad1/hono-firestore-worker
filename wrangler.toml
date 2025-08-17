@@ -5,7 +5,4 @@ compatibility_date = "2024-01-01"
 [vars]
 # ضع هنا بيانات Firebase الخاصة بك
 FIREBASE_PROJECT_ID = "your-project-id"
-FIREBASE_CLIENT_EMAIL = "your-service-account-email@your-project-id.iam.gserviceaccount.com"
-
-# ستحتاج لإضافة Private Key كـ Secret في Cloudflare Dashboard
-# FIREBASE_PRIVATE_KEY سيكون متاح كـ secret
+FIREBASE_API_KEY = "your-web-api-key"
