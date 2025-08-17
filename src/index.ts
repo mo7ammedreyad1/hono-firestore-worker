@@ -42,41 +42,82 @@ class FirestoreClient {
     };
 
     const header = { alg: 'RS256', typ: 'JWT' };
-    const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const encodedPayload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const encodedHeader = this.base64UrlEncode(JSON.stringify(header));
+    const encodedPayload = this.base64UrlEncode(JSON.stringify(payload));
     
     const signatureInput = `${encodedHeader}.${encodedPayload}`;
     
-    // Import private key
-    const keyData = privateKey.replace(/\\n/g, '\n');
-    const key = await crypto.subtle.importKey(
-      'pkcs8',
-      new TextEncoder().encode(keyData),
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
+    try {
+      // Clean and prepare the private key
+      const cleanPrivateKey = privateKey
+        .replace(/\\n/g, '\n')
+        .replace(/\r/g, '')
+        .trim();
+      
+      // Convert PEM to binary
+      const pemContent = cleanPrivateKey
+        .replace('-----BEGIN PRIVATE KEY-----', '')
+        .replace('-----END PRIVATE KEY-----', '')
+        .replace(/\s/g, '');
+      
+      const binaryKey = this.base64ToArrayBuffer(pemContent);
+      
+      // Import the key
+      const key = await crypto.subtle.importKey(
+        'pkcs8',
+        binaryKey,
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
 
-    const signature = await crypto.subtle.sign(
-      'RSASSA-PKCS1-v1_5',
-      key,
-      new TextEncoder().encode(signatureInput)
-    );
+      // Sign the payload
+      const signature = await crypto.subtle.sign(
+        'RSASSA-PKCS1-v1_5',
+        key,
+        new TextEncoder().encode(signatureInput)
+      );
 
-    const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
-      .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+      const encodedSignature = this.base64UrlEncode(new Uint8Array(signature));
+      const jwt = `${signatureInput}.${encodedSignature}`;
 
-    const jwt = `${signatureInput}.${encodedSignature}`;
+      const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+      });
 
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
-    });
+      const result = await response.json() as any;
+      
+      if (result.error) {
+        throw new Error(`OAuth error: ${result.error_description || result.error}`);
+      }
+      
+      this.accessToken = result.access_token;
+      return this.accessToken;
+    } catch (error) {
+      console.error('Error getting access token:', error);
+      throw new Error(`Authentication failed: ${error.message}`);
+    }
+  }
 
-    const result = await response.json() as any;
-    this.accessToken = result.access_token;
-    return this.accessToken;
+  private base64UrlEncode(data: string | Uint8Array): string {
+    let base64: string;
+    if (typeof data === 'string') {
+      base64 = btoa(data);
+    } else {
+      base64 = btoa(String.fromCharCode(...data));
+    }
+    return base64.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  }
+
+  private base64ToArrayBuffer(base64: string): ArrayBuffer {
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
   }
 
   async addDocument(collection: string, data: FirestoreData, token: string): Promise<any> {
